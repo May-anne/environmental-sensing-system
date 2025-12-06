@@ -18,11 +18,16 @@ const unsigned long intervalDHT = 10000;
 const unsigned long darkAlertTime = 120000;
 unsigned long lastLuxRead = 0;
 unsigned long lastDHTRead = 0;
+unsigned long lastBuzzerAlert = 0;
 unsigned long darkStartTime = 0;
 bool darkPeriod = false; 
 bool darkLightDetected = false;
 int rangeOutTempTimes = 0;
 int rangeOutHRTimes = 0;
+
+const unsigned long intervalBuzzer = 30000; // 30 segundos
+const int buzzDuration = 300;               // 300 ms
+unsigned long lastMillis = 0;
 
 const int sampleWindow = 200; // ms
 
@@ -53,11 +58,9 @@ void setup(){
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
-
   /*-------- Bloco 1: Análise de Luminosidade --------*/
-  if (currentMillis - lastLuxRead >= intervalLUX) {
-    lastLuxRead = currentMillis;
+  if (millis() - lastLuxRead >= intervalLUX) {
+    lastLuxRead = millis();
 
     float luxValue = lightMeter.readLightLevel();
     Serial.print("Lux: ");
@@ -188,6 +191,17 @@ void readSoundSensor(){
   Serial.print("  p2p="); Serial.println(p2p);
 }
 
-void activateAlarm(){
+void activateBuzzer(){
+  unsigned long currentMillis = millis();
+  unsigned long elapsed = currentMillis - lastMillis;
 
+  if (elapsed < buzzDuration) {
+    digitalWrite(buzzerPin, HIGH); // Buzzer ligado
+  } else {
+    digitalWrite(buzzerPin, LOW);  // Buzzer desligado
+  }
+
+  if (elapsed >= intervalBuzzer) {
+    lastMillis = currentMillis; // Reinicia o contador a cada intervalo
+  }
 }
