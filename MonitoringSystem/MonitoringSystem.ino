@@ -14,11 +14,15 @@
 #define soundPin 33
 
 const unsigned long intervalLUX = 2000;
+const unsigned long intervalDHT = 10000;
 const unsigned long darkAlertTime = 120000;
 unsigned long lastLuxRead = 0;
+unsigned long lastDHTRead = 0;
 unsigned long darkStartTime = 0;
 bool darkPeriod = false; 
 bool darkLightDetected = false;
+int rangeOutTempTimes = 0;
+int rangeOutHRTimes = 0;
 
 const int sampleWindow = 200; // ms
 
@@ -89,6 +93,63 @@ void loop() {
   }
 
   /*-------- Bloco 2: Análise de Umidade e Temperatura --------*/
+  if(millis() - lastDHTRead >= intervalDHT){ //falta a média de 1 min
+    lastDHTRead = millis();
+
+    bool rangeOutTemp = false;
+    bool rangeOutRH   = false;
+    float tempC = dht11.readTemperature();
+    float rh  = dht11.readHumidity();
+
+    if(isnan(tempC) || isnan(rh))
+      Serial.println("Failed to read from DHT11 sensor!");
+    else{
+      if(tempC < 22 || tempC > 26){
+        //Alerta: médio
+        rangeOutTemp = true;
+      }
+      if(rh < 40 || rh > 60){
+        //Alerta: médio
+        rangeOutRH = true;
+      }
+
+      // ------- LED de alerta médio -------
+      if (rangeOutTemp || rangeOutRH) {
+        digitalWrite(yellowPin, HIGH);
+      } else {
+        digitalWrite(yellowPin, LOW);
+      }
+
+      // ------- Contagem de vezes -------
+      if(rangeOutTemp){
+        rangeOutTempTimes++;
+        Serial.print("Temperature out of range. Counting times: ");
+        Serial.println(rangeOutTempTimes);
+      } else {
+        rangeOutTempTimes = 0;
+      }
+
+      if(rangeOutRH){
+        rangeOutRHTimes++;
+        Serial.print("Humidity out of range. Counting times: ");
+        Serial.println(rangeOutRHTimes);
+      } else {
+        rangeOutRHTimes = 0;
+      }
+
+      // --- Alerta após 3 leituras consecutivas ---
+      if (rangeOutTempTimes >= 3) {
+        Serial.println("Temperature out of range for 3 readings");
+      }
+
+      if (rangeOutRHTimes >= 3) {
+        Serial.println("Humidity out of range for 3 readings");
+      }
+    }
+  }
+
+  /*-------- Bloco 3: Análise de Ruído --------*/
+
 }
 
 void readDHT11Sensor(){
