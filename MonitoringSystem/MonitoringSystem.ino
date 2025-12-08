@@ -1,20 +1,26 @@
+//========= Importação de Bibliotecas =============
 #include <Wire.h>
 #include <BH1750.h>
-#include <DHT.h>
+#include <DHTesp.h>
 
+//========= GY-30 =============
 #define SCL 22
 #define SDA 21
 
+//========= DHT11 =============
+#define dhtPin 19
+
+//========= KY-037 =============
+#define soundPin 33
+
+//========= Alarme =============
 #define redPin 4
 #define yellowPin 16
 #define greenPin 17
-#define buzzerPin 25
+#define buzzerPin 26
 
-#define dhtPin 14
-#define soundPin 33
-
+//========= Constantes e Variáveis do GY-30 =============
 const unsigned long intervalLUX = 2000;
-const unsigned long intervalDHT = 10000;
 const unsigned long darkAlertTime = 120000;
 unsigned long lastLuxRead = 0;
 unsigned long lastDHTRead = 0;
@@ -22,23 +28,39 @@ unsigned long lastBuzzerAlert = 0;
 unsigned long darkStartTime = 0;
 bool darkPeriod = false; 
 bool darkLightDetected = false;
-int rangeOutTempTimes = 0;
-int rangeOutHRTimes = 0;
 
+//========= Constantes e Variáveis do DHT =============
+const unsigned long intervalDHT = 10000;
+int rangeOutTempTimes = 0;
+int rangeOutRHTimes = 0;
+
+//========= Constantes e Variáveis do KY-037 =============
+unsigned long window = 1000;   // 1 segundo
+unsigned long windowStart = 0;
+
+// Contagem de tempo em HIGH
+unsigned long highTime = 0;
+
+// Parâmetros do score
+int peakThreshold = 60;        // ajuste conforme ruído do ambiente
+unsigned long peakDuration = 0;
+
+//========= Constantes e Variáveis do Alarme Sonoro =============
 const unsigned long intervalBuzzer = 30000; // 30 segundos
 const int buzzDuration = 300;               // 300 ms
 unsigned long lastMillis = 0;
 
-const int sampleWindow = 200; // ms
-
-DHT dht11(dhtPin, DHT11);
+//========= Objetos =============
 BH1750 lightMeter;
+DHTesp dht;
 
+//========= Declaração de Funções =============
 float readLuxSensor();
 void readDHT11Sensor();
 void readSoundSensor();
 void activateAlarm();
 
+//========= Setup =============
 void setup(){
   Serial.begin(115200);
 
@@ -51,13 +73,17 @@ void setup(){
   Wire.begin(SDA, SCL);
   lightMeter.begin();
 
-  dht11.begin();
+  dht.setup(dhtPin, DHTesp::DHT11);
 
   analogReadResolution(12);
   analogSetPinAttenuation(soundPin, ADC_11db);
+  digitalWrite(buzzerPin, LOW);  // mantém desligado
+  windowStart = millis();
 }
 
+//========= Loop =============
 void loop() {
+  unsigned long currentMillis = millis();
   /*-------- Bloco 1: Análise de Luminosidade --------*/
   if (millis() - lastLuxRead >= intervalLUX) {
     lastLuxRead = millis();
@@ -101,17 +127,16 @@ void loop() {
 
     bool rangeOutTemp = false;
     bool rangeOutRH   = false;
-    float tempC = dht11.readTemperature();
-    float rh  = dht11.readHumidity();
+    TempAndHumidity data = dht.getTempAndHumidity();
 
-    if(isnan(tempC) || isnan(rh))
+    if(isnan(data.temperature))
       Serial.println("Failed to read from DHT11 sensor!");
     else{
-      if(tempC < 22 || tempC > 26){
+      if(data.temperature < 22 || data.temperature > 26){
         //Alerta: médio
         rangeOutTemp = true;
       }
-      if(rh < 40 || rh > 60){
+      if(data.humidity < 40 || data.humidity > 60){
         //Alerta: médio
         rangeOutRH = true;
       }
@@ -152,43 +177,56 @@ void loop() {
   }
 
   /*-------- Bloco 3: Análise de Ruído --------*/
+  unsigned long now = millis();
 
+  // Se D0 está HIGH, calcula quanto tempo ficou HIGH desde o último loop
+ static unsigned long lastCheck = now;
+  unsigned long elapsed = now - lastCheck;
+  lastCheck = now;
+
+  if (digitalRead(soundPin) == HIGH) {
+      highTime += elapsed;   // agora sim: soma tempo real em ms
+  }
+
+  // Quando a janela termina (1s)
+  if (now - windowStart >= window) {
+
+      // Calcula score baseado na fração de HIGH dentro da janela
+      int score = (highTime * 100) / window;  // 0–100%
+
+      Serial.print("Score: ");
+      Serial.println(score);
+
+      // --- Detecção de pico ---
+      if (score > peakThreshold) {
+        peakDuration += window;   // acumula ms
+      } else {
+        peakDuration = 0;
+      }
+
+      if (peakDuration >= 3000) { // pico por 3 segundos
+        Serial.println("ALERTA: Pico longo detectado!");
+      }
+
+      // Reinicia janela
+      highTime = 0;
+      windowStart = now;
+  }
 }
 
 void readDHT11Sensor(){
-  float humi  = dht11.readHumidity();
-  float tempC = dht11.readTemperature();
+  TempAndHumidity data = dht.getTempAndHumidity();
 
-  if (isnan(tempC) || isnan(humi)) {
-    Serial.println("Failed to read from DHT11 sensor!");
+  if (isnan(data.temperature)) {
+    Serial.println("DHT11 falhou!");
   } else {
-    Serial.print("Humidity: ");
-    Serial.print(humi);
-    Serial.print("%");
-
-    Serial.print("  |  ");
-
-    Serial.print("Temperature: ");
-    Serial.print(tempC);
-    Serial.print("°C  ~  ");
+    Serial.print("Temp: ");
+    Serial.println(data.temperature);
+    Serial.print("Hum: ");
+    Serial.println(data.humidity);
   }
-}
 
-void readSoundSensor(){
-  unsigned long end = millis() + sampleWindow;
-  int minV = 4095, maxV = 0, v;
-  unsigned long samples = 0;
-  while (millis() < end) {
-    v = analogRead(soundPin);
-    if (v < minV) minV = v;
-    if (v > maxV) maxV = v;
-    samples++;
-  }
-  int p2p = maxV - minV;
-  Serial.print("samples="); Serial.print(samples);
-  Serial.print("  min="); Serial.print(minV);
-  Serial.print("  max="); Serial.print(maxV);
-  Serial.print("  p2p="); Serial.println(p2p);
+  delay(2000);
 }
 
 void activateBuzzer(){
