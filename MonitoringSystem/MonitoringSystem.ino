@@ -2,73 +2,198 @@
 #include <Wire.h>
 #include <BH1750.h>
 #include <DHTesp.h>
+#include <LittleFS.h>
+#include <ArduinoJson.h> 
 
-//========= GY-30 =============
+//========= GY-30 ============
 #define SCL 22
 #define SDA 21
 
-//========= DHT11 =============
+//========= DHT11 ============
 #define dhtPin 19
 
-//========= KY-037 =============
+//========= KY-037 ============
 #define soundPin 33
 
-//========= Alarme =============
+//========= Alarme ============
 #define redPin 4
 #define yellowPin 16
 #define greenPin 17
 #define buzzerPin 26
+#define buttonPin 27
 
 //========= Constantes e Variáveis do GY-30 =============
-const unsigned long intervalLUX = 2000;
-const unsigned long darkAlertTime = 120000;
+const unsigned long intervalLUX = 2000; // 2s (mantive teu 2s original)
+const unsigned long darkAlertTime = 120000; // 2 min para escuro
 unsigned long lastLuxRead = 0;
 unsigned long lastDHTRead = 0;
 unsigned long lastBuzzerAlert = 0;
 unsigned long darkStartTime = 0;
-bool darkPeriod = false; 
+bool darkPeriod = false;
 bool darkLightDetected = false;
 
-//========= Constantes e Variáveis do DHT =============
-const unsigned long intervalDHT = 10000;
-int rangeOutTempTimes = 0;
-int rangeOutRHTimes = 0;
+//========= Constantes e Variáveis do DHT ============
+const unsigned long intervalDHT = 10000; // 10s
+int rangeOutTempTimes = 0; // mantive por compatibilidade
+int rangeOutRHTimes = 0;   // mantive por compatibilidade
 
-//========= Constantes e Variáveis do KY-037 =============
-unsigned long window = 1000;   // 1 segundo
-unsigned long windowStart = 0;
-
-// Contagem de tempo em HIGH
-unsigned long highTime = 0;
-
+//========= Constantes e Variáveis do KY-037 ============
+unsigned long window = 1000;      // Tempo da Janela de 1 segundo
+unsigned long windowStart = 0;    // Início da janela
+unsigned long highTime = 0;       // Contagem de tempo em HIGH
 // Parâmetros do score
-int peakThreshold = 60;        // ajuste conforme ruído do ambiente
-unsigned long peakDuration = 0;
+int peakThreshold = 60;           // Ajuste conforme ruído do ambiente
+unsigned long peakDuration = 0;   // Duração do pico
 
-//========= Constantes e Variáveis do Alarme Sonoro =============
+//========= Constantes e Variáveis do Alarme Sonoro ============
 const unsigned long intervalBuzzer = 30000; // 30 segundos
 const int buzzDuration = 300;               // 300 ms
 unsigned long lastMillis = 0;
 
-//========= Objetos =============
-BH1750 lightMeter;
-DHTesp dht;
+// ========= Novas constantes para médias/histerese/limites ==========
+const float TEMP_OK_MIN = 22.0, TEMP_OK_MAX = 33;
+const float TEMP_ATT_MIN = 20.0, TEMP_ATT_MAX = 28.0;
 
-//========= Declaração de Funções =============
+const float RH_OK_MIN   = 35.0, RH_OK_MAX   = 66.0;
+const float RH_ATT_MIN  = 35.0, RH_ATT_MAX  = 65.0;
+
+const float LUX_OK_MIN  = 150.0, LUX_OK_MAX = 300.0;
+const float LUX_ATT_MIN = 100.0, LUX_ATT_MAX = 500.0;
+
+const int NOISE_OK_MAX  = 40; const int NOISE_ATT_MAX = 60;
+
+// Número de Amostras (Janelas)
+const uint8_t LUX_WIN = 30;   // 2s * 30 = 60s
+const uint8_t DHT_WIN = 6;    // 10s * 6 = 60s
+const uint8_t NOISE_WIN = 60; // 1s * 60 = 60s
+
+// Buffers circulares
+float luxBuf[LUX_WIN];      uint8_t luxHead=0,  luxCount=0;
+float tempBuf[DHT_WIN];     uint8_t tempHead=0, tempCount=0;
+float humBuf[DHT_WIN];      uint8_t humHead=0,  humCount=0;
+int   noiseBuf[NOISE_WIN];  uint8_t noiseHead=0, noiseCount=0;
+
+// Médias móveis
+float luxAvg1m=0.0, tempAvg1m=0.0, rhAvg1m=0.0;
+float noiseAvg1m=0.0;
+
+// Máx e Min
+float luxMin = 32555.0;   float luxMax = 0.0;
+float tempMin = 32555.0;  float tempMax = 0.0;
+float rhMin= 100.0;       float rhMax = 0.0;
+float noiseMin = 100.0;   float noiseMax = 0.0; float noisePeak = 0.0;
+
+// Histerese / contagens
+uint8_t outTempCount=0, inTempCount=0;
+uint8_t outRHCount=0,   inRHCount=0;
+uint8_t outLuxCount=0,  inLuxCount=0;
+uint8_t outNoiseCount=0,inNoiseCount=0;
+
+// tempos em condição crítica (segundos acumulados)
+uint16_t critTempSec=0, critRHSec=0, critLuxSec=0, critNoiseSec=0;
+uint16_t multiOutSec=0;
+
+// Flag para indicar alarme por luz no período escuro (setada onde apropriado)
+bool darkAlarm = false;
+
+const unsigned long RUN_24H = 24UL * 60UL * 60UL * 1000UL; // 24h em ms
+const unsigned long RUN_8MIN = 8UL * 60UL * 1000UL; // 8 MIN em ms
+unsigned long startMillis = 0;
+bool finished24h = false;
+
+float noiseMin24h = 100;
+float noiseMax24h = 0;
+
+//Contadores globais
+uint32_t tempTotalSamples = 0; uint32_t rhTotalSamples = 0;
+uint32_t tempOutSamples   = 0; uint32_t rhOutSamples   = 0;
+
+uint32_t luxTotalSamples = 0; uint32_t noiseTotalSamples = 0;
+uint32_t luxOutSamples   = 0; uint32_t noiseOutSamples   = 0;
+
+uint16_t dayCounter = 0;
+
+// Estado global
+enum SystemState { OK_STATE, ATENCAO_STATE, ALARME_STATE };
+SystemState sysState = OK_STATE;
+
+//========= Declaração de Funções ============
 float readLuxSensor();
 void readDHT11Sensor();
 void readSoundSensor();
-void activateAlarm();
+void activateBuzzer();
+void updateMacroCycle(float luxAvg1m);
+bool detectNightLight(float luxValue, unsigned long now);
+void createCSV(const char *filename);
+void printFile(const char *filename);
+void loadDayCounter();
+void saveDayCounter();
+void resetMetrics();
 
-//========= Setup =============
+// helpers
+template<typename T>
+void pushCirc(T* buf, uint8_t win, uint8_t &head, uint8_t &cnt, T v){
+  buf[head] = v;
+  head = (head + 1) % win;
+  if (cnt < win) cnt++;
+}
+
+template<typename T>
+float avgBuf(T* buf, uint8_t cnt){
+  if (cnt==0) return 0.0;
+  long double s=0;
+  for(uint8_t i=0;i<cnt;i++) s += buf[i];
+  return (float)(s / cnt);
+}
+
+//========= Objetos ============
+BH1750 lightMeter;
+DHTesp dht;
+
+// ======= Macro ciclo DIA/NOITE (12h) ========
+uint32_t darkMinutes = 0;   // minutos consecutivos com pouca luz
+uint32_t lightMinutes = 0;  // minutos consecutivos com muita luz
+
+const uint16_t MIN_HOURS_NIGHT = 6;  // mínimo confiável
+const uint16_t MIN_HOURS_DAY   = 6;
+const uint16_t MIN_MINUTES_NIGHT = MIN_HOURS_NIGHT * 60; // 360 min
+const uint16_t MIN_MINUTES_DAY   = MIN_HOURS_DAY * 60;
+
+// thresholds do macro (baseados na média de 1h)
+const float LUX_LONG_DAY  = 120.0;  // acima disso por muitas horas = dia
+const float LUX_LONG_NIGHT = 40.0;  // abaixo disso por muitas horas = noite
+
+// estado macro
+bool macroNight = false;   // macro = ciclo de 12h baseado na tendência
+
+// ============ Variáveis do botão ============
+volatile bool buttonPressed = false;
+bool buzzerMuted = false;
+unsigned long muteStartMillis = 0;
+const unsigned long MUTE_TIME = 10UL * 60UL * 1000UL; // 10 minutos
+
+// ============ Interrupção do Botão ============
+void IRAM_ATTR handleButtonPress() {
+  buttonPressed = true;
+}
+
+//========= Setup ============
 void setup(){
   Serial.begin(115200);
+
+  if(!LittleFS.begin()){
+    Serial.println("An Error has occurred while mounting LittleFS");
+    return;
+  }
+  Serial.println("LittleFS mounted successfully");
+  loadDayCounter(); 
 
   pinMode(redPin, OUTPUT);
   pinMode(yellowPin, OUTPUT);
   pinMode(greenPin, OUTPUT);
   pinMode(buzzerPin, OUTPUT);
   pinMode(soundPin, INPUT);
+  pinMode(buttonPin, INPUT);
 
   Wire.begin(SDA, SCL);
   lightMeter.begin();
@@ -77,87 +202,168 @@ void setup(){
 
   analogReadResolution(12);
   analogSetPinAttenuation(soundPin, ADC_11db);
-  digitalWrite(buzzerPin, LOW);  // mantém desligado
+  digitalWrite(buzzerPin, LOW);
   windowStart = millis();
+
+  // inicializa LEDs
+  digitalWrite(greenPin, HIGH);
+  digitalWrite(yellowPin, LOW);
+  digitalWrite(redPin, LOW);
+  attachInterrupt(digitalPinToInterrupt(buttonPin), handleButtonPress, FALLING);
+
+  startMillis = millis();
+  Serial.println(">>> INICIO DA COLETA 24H");
 }
 
-//========= Loop =============
+//========= Loop ============
 void loop() {
+  // --------- BOTÃO DE SILENCIAMENTO ---------
+  if (buttonPressed) {
+    buttonPressed = false;
+
+    if (sysState == ALARME_STATE) {
+      buzzerMuted = true;
+      muteStartMillis = millis();
+      Serial.println(">>> ALARME SILENCIADO POR 10 MINUTOS");
+    }
+  }
+
   unsigned long currentMillis = millis();
-  /*-------- Bloco 1: Análise de Luminosidade --------*/
-  if (millis() - lastLuxRead >= intervalLUX) {
-    lastLuxRead = millis();
+  /*-------- Bloco 1: Análise de Luminosidade (cada 2s) --------*/
+  if (currentMillis - lastLuxRead >= intervalLUX) {
+    lastLuxRead = currentMillis;
 
     float luxValue = lightMeter.readLightLevel();
-    Serial.print("Lux: ");
+    
+    //Máximo e Mínimo
+    if(luxValue > luxMax)
+      luxMax = luxValue;
+
+    if(luxValue < luxMin)
+      luxMin = luxValue;
+
+    Serial.print("Lux (raw): ");
     Serial.println(luxValue);
+
+    // empilha para média 1 min
+    pushCirc(luxBuf, LUX_WIN, luxHead, luxCount, luxValue);
+    luxAvg1m = avgBuf(luxBuf, luxCount);
+
+    luxTotalSamples++;
+    if (luxAvg1m < LUX_OK_MIN || luxAvg1m > LUX_OK_MAX) {
+        luxOutSamples++;
+    }
+
+    // Atualiza ciclo macro de 12h
+    updateMacroCycle(luxAvg1m);
+
+    bool nightLightAlarm = detectNightLight(luxValue, currentMillis);
+    if (nightLightAlarm) {
+        darkAlarm = true;   // aciona o alarme do teu sistema
+        Serial.println("*** LUZ INDEVIDA DETECTADA DURANTE A NOITE (MACRO) ***");
+    }
+
+    //Serial.print("Lux (1m avg): ");
+    //Serial.println(luxAvg1m);
 
     // ---------- Período claro ----------
     if (!darkPeriod) {
-      if (luxValue < 150 || luxValue > 300) { //Aprimorar depois
-        Serial.println("Lux fora do ideal no período claro (150–300).");
-        // coloque ação aqui (LED, buzzer, etc.)
-      }
+      bool insideOK = (luxAvg1m >= LUX_OK_MIN && luxAvg1m <= LUX_OK_MAX);
+      bool outside  = !insideOK;
+      bool critical = (luxAvg1m < LUX_ATT_MIN || luxAvg1m > LUX_ATT_MAX);
+
+      if (outside){ outLuxCount++; inLuxCount=0; } else { inLuxCount++; outLuxCount=0; }
+      if (critical) critLuxSec += 2; else critLuxSec = 0;
+
       darkLightDetected = false;
       darkStartTime = 0;
     }
-
     // ---------- Período escuro ----------
     else {
+      // se detectar qualquer luz (luxValue > 0), inicia contagem
       if (luxValue > 0) {
-        if (!darkLightDetected) { //Se detectar luz, inicie contagem
+        if (!darkLightDetected) {
           darkStartTime = currentMillis;
           darkLightDetected = true;
-        } else { //Luz ainda detectada detectada, meça o tempo
+        } else {
           if (currentMillis - darkStartTime >= darkAlertTime) {
             Serial.println("Luz detectada no período escuro por > 2 min.");
-            // coloque ação aqui
+            darkAlarm = true;
+            critLuxSec = 300;
           }
         }
-      } else { //Lux não é zero (ou deixou de ser), resete flags
+      } else {
         darkLightDetected = false;
         darkStartTime = 0;
       }
     }
   }
 
-  /*-------- Bloco 2: Análise de Umidade e Temperatura --------*/
-  if(millis() - lastDHTRead >= intervalDHT){ //falta a média de 1 min
-    lastDHTRead = millis();
+  /*-------- Bloco 2: Análise de Umidade e Temperatura (cada 10s) --------*/
+  if(currentMillis - lastDHTRead >= intervalDHT){
+    lastDHTRead = currentMillis;
 
-    bool rangeOutTemp = false;
-    bool rangeOutRH   = false;
     TempAndHumidity data = dht.getTempAndHumidity();
 
-    if(isnan(data.temperature))
+    if(isnan(data.temperature) || isnan(data.humidity)){
       Serial.println("Failed to read from DHT11 sensor!");
-    else{
-      if(data.temperature < 22 || data.temperature > 26){
-        //Alerta: médio
-        rangeOutTemp = true;
-      }
-      if(data.humidity < 40 || data.humidity > 60){
-        //Alerta: médio
-        rangeOutRH = true;
-      }
+    } else {
+      Serial.print("Temp (inst): "); Serial.println(data.temperature);
+      Serial.print("Hum  (inst): "); Serial.println(data.humidity);
 
-      // ------- LED de alerta médio -------
-      if (rangeOutTemp || rangeOutRH) {
-        digitalWrite(yellowPin, HIGH);
-      } else {
-        digitalWrite(yellowPin, LOW);
-      }
+    //Máximo e Mínimo
+    if(data.temperature > tempMax)
+      tempMax = data.temperature;
 
-      // ------- Contagem de vezes -------
-      if(rangeOutTemp){
-        rangeOutTempTimes++;
-        Serial.print("Temperature out of range. Counting times: ");
-        Serial.println(rangeOutTempTimes);
-      } else {
-        rangeOutTempTimes = 0;
-      }
+    if(data.temperature < tempMin)
+      tempMin = data.temperature;
 
-      if(rangeOutRH){
+    // empilha para média de 1 min
+    pushCirc(tempBuf, DHT_WIN, tempHead, tempCount, data.temperature);
+    pushCirc(humBuf,  DHT_WIN, humHead,  humCount,  data.humidity);
+    tempAvg1m = avgBuf(tempBuf, tempCount);
+    rhAvg1m   = avgBuf(humBuf,  humCount);
+
+    tempTotalSamples++;
+    if (tempAvg1m < TEMP_OK_MIN || tempAvg1m > TEMP_OK_MAX) {
+        tempOutSamples++;
+    }
+
+    rhTotalSamples++;
+    if (rhAvg1m < RH_OK_MIN || rhAvg1m > RH_OK_MAX) {
+        rhOutSamples++;
+    }
+
+    //Serial.print("Temp (1m avg): "); Serial.println(tempAvg1m);
+    //Serial.print("Hum  (1m avg): "); Serial.println(rhAvg1m);
+
+    // classificação com base nas médias
+    bool tempOK  = (tempAvg1m >= TEMP_OK_MIN && tempAvg1m <= TEMP_OK_MAX);
+    bool tempATT = (!tempOK) && (tempAvg1m >= TEMP_ATT_MIN && tempAvg1m <= TEMP_ATT_MAX);
+    bool tempCRI = (!tempOK) && !tempATT;
+
+    bool rhOK  = (rhAvg1m >= RH_OK_MIN && rhAvg1m <= RH_OK_MAX);
+    bool rhATT = (!rhOK) && (rhAvg1m >= RH_ATT_MIN && rhAvg1m <= RH_ATT_MAX);
+    bool rhCRI = (!rhOK) && !rhATT;
+
+    // Histerese: 3 leituras consecutivas -> atenção (DHT a cada 10s)
+    if (!tempOK){ outTempCount++; inTempCount=0; } else { inTempCount++; outTempCount=0; }
+    if (!rhOK)  { outRHCount++;   inRHCount=0;   } else { inRHCount++;   outRHCount=0;   }
+
+    // Duração crítico: acumula segundos se crítico
+    critTempSec = tempCRI ? (critTempSec + 10) : 0;
+    critRHSec   = rhCRI   ? (critRHSec   + 10) : 0;
+
+    // Mantive teus prints de contagem de leituras
+    if (!tempOK) {
+      rangeOutTempTimes++;
+      Serial.print("Temperature out of range. Counting times: ");
+      Serial.println(rangeOutTempTimes);
+    } else {
+      rangeOutTempTimes = 0;
+    }
+
+      if (!rhOK) {
         rangeOutRHTimes++;
         Serial.print("Humidity out of range. Counting times: ");
         Serial.println(rangeOutRHTimes);
@@ -165,37 +371,40 @@ void loop() {
         rangeOutRHTimes = 0;
       }
 
-      // --- Alerta após 3 leituras consecutivas ---
       if (rangeOutTempTimes >= 3) {
         Serial.println("Temperature out of range for 3 readings");
       }
-
       if (rangeOutRHTimes >= 3) {
         Serial.println("Humidity out of range for 3 readings");
       }
     }
   }
 
-  /*-------- Bloco 3: Análise de Ruído --------*/
+  /*-------- Bloco 3: Análise de Ruído (janela 1s, score -> média 1 min) --------*/
   unsigned long now = millis();
 
-  // Se D0 está HIGH, calcula quanto tempo ficou HIGH desde o último loop
- static unsigned long lastCheck = now;
+  static unsigned long lastCheck = 0;
+  if (lastCheck == 0) lastCheck = now;
   unsigned long elapsed = now - lastCheck;
   lastCheck = now;
 
   if (digitalRead(soundPin) == HIGH) {
-      highTime += elapsed;   // agora sim: soma tempo real em ms
+      highTime += elapsed;
   }
 
-  // Quando a janela termina (1s)
-  if (now - windowStart >= window) {
+  if (now - windowStart >= window) { // janela em 1s
+      int score = 0;
+      if (window > 0) score = (highTime * 100) / window;  // 0–100%
 
-      // Calcula score baseado na fração de HIGH dentro da janela
-      int score = (highTime * 100) / window;  // 0–100%
-
-      Serial.print("Score: ");
+      Serial.print("Score (1s): ");
       Serial.println(score);
+
+      // atualizar mínimo e máximo
+      if (score < noiseMin) noiseMin = score;
+      if (score > noiseMax) noiseMax = score;
+
+      if (score < noiseMin24h) noiseMin24h = score;
+      if (score > noiseMax24h) noiseMax24h = score;
 
       // --- Detecção de pico ---
       if (score > peakThreshold) {
@@ -204,14 +413,135 @@ void loop() {
         peakDuration = 0;
       }
 
-      if (peakDuration >= 3000) { // pico por 3 segundos
+      if (peakDuration >= 3000) { // Se tiver pico por 3 segundos
         Serial.println("ALERTA: Pico longo detectado!");
+      }
+
+      // guarda score no buffer de 1 min
+      pushCirc(noiseBuf, NOISE_WIN, noiseHead, noiseCount, score);
+      noiseAvg1m = avgBuf(noiseBuf, noiseCount);
+      //Serial.print("Noise (1m avg): "); Serial.println(noiseAvg1m);
+
+      noiseTotalSamples++;
+      if (noiseAvg1m > NOISE_OK_MAX) {
+          noiseOutSamples++;
+      }
+
+
+      // classificação média 1 min
+      bool noiseOK  = (noiseAvg1m <= NOISE_OK_MAX);
+      bool noiseATT = (!noiseOK && noiseAvg1m <= NOISE_ATT_MAX);
+      bool noiseCRI = (!noiseOK && noiseAvg1m > NOISE_ATT_MAX);
+
+      if (!noiseOK){ outNoiseCount++; inNoiseCount=0; } else { inNoiseCount++; outNoiseCount=0; }
+      critNoiseSec = noiseCRI ? (critNoiseSec + 1) : 0; // 1s por iteração de janela
+
+      if (noiseCount >= NOISE_WIN) { // 60 amostras (1 por segundo)
+          noiseCount = 0; // reinicia janela
+          noiseMin = 100;
+          noiseMax = 0;
       }
 
       // Reinicia janela
       highTime = 0;
       windowStart = now;
   }
+
+  /*-------- Decisão global (sincronizada com leituras, executada após atualizações) --------*/
+  // Conta quantas métricas estão fora do ideal (usa contadores "fora" >=1)
+  bool tempOut  = (outTempCount >= 1);
+  bool rhOut    = (outRHCount >= 1);
+  bool luxOut   = (outLuxCount >= 1);
+  bool noiseOut = (outNoiseCount >= 1);
+  uint8_t outs = (tempOut?1:0) + (rhOut?1:0) + (luxOut?1:0) + (noiseOut?1:0);
+
+  // multi-out por 1 min -> alarme
+  if (outs >= 2) multiOutSec += 1; // estamos no loop livre; aproximamos: incremento leve
+  else multiOutSec = 0;
+
+  // Ajuste: se você preferir, incremente multiOutSec por 10 (p/ sincronizar com DHT)
+  // Condições de alarme
+  bool alarmByCriticalTime = (critTempSec >= 300) || (critRHSec >= 300) || (critLuxSec >= 300) || (critNoiseSec >= 300);
+  bool alarmByMultiple    = (multiOutSec >= 60); // 60 "unidades" -> ~60s aprox
+
+  bool tempAttention  = (outTempCount >= 3); // 3 leituras consecutivas -> atenção
+  bool rhAttention    = (outRHCount >= 3);
+  bool luxAttention   = (outLuxCount >= 3);
+  bool noiseAttention = (outNoiseCount >= 3);
+
+  SystemState newState = OK_STATE;
+  if (alarmByCriticalTime || alarmByMultiple || darkAlarm) newState = ALARME_STATE;
+  else if (tempAttention || rhAttention || luxAttention || noiseAttention) newState = ATENCAO_STATE;
+  else newState = OK_STATE;
+
+  if (newState != sysState) {
+    sysState = newState;
+    Serial.print("Estado alterado para: ");
+    if (sysState == OK_STATE) Serial.println("OK");
+    else if (sysState == ATENCAO_STATE) Serial.println("ATENCAO");
+    else Serial.println("ALARME");
+  }
+
+  // aplica saídas (LEDs + buzzer)
+  switch(sysState){
+    case OK_STATE:
+      digitalWrite(greenPin, HIGH);
+      digitalWrite(yellowPin, LOW);
+      digitalWrite(redPin, LOW);
+      // garante buzzer desligado
+      digitalWrite(buzzerPin, LOW);
+      break;
+
+    case ATENCAO_STATE:
+      digitalWrite(greenPin, LOW);
+      digitalWrite(yellowPin, HIGH);
+      digitalWrite(redPin, LOW);
+      digitalWrite(buzzerPin, LOW);
+      break;
+
+    case ALARME_STATE:
+      digitalWrite(greenPin, LOW);
+      digitalWrite(yellowPin, LOW);
+      digitalWrite(redPin, HIGH);
+      // chama a rotina de buzzer (que gerencia intervalos)
+      activateBuzzer();
+      break;
+  }
+
+  if (buzzerMuted && (millis() - muteStartMillis >= MUTE_TIME)) {
+    buzzerMuted = false;
+    Serial.println(">>> SILENCIAMENTO EXPIRADO");
+  }
+
+if (!finished24h && millis() - startMillis >= RUN_8MIN) {
+    finished24h = true;
+    Serial.println(">>> FIM DA COLETA");
+
+    char csvName[32];
+    char jsonName[32];
+
+    sprintf(csvName,  "/relatorio_dia_%03d.csv",  dayCounter);
+    sprintf(jsonName, "/relatorio_dia_%03d.json", dayCounter);
+
+    createFile(jsonName);
+    createCSV(csvName);
+    printFile(csvName);
+
+    dayCounter++;
+    saveDayCounter();   // salva contador no LittleFS
+
+    // ===== PREPARA PRÓXIMO CICLO =====
+    resetMetrics();           // zera min/max/médias/contadores
+    startMillis = millis();   // reinicia temporização
+    finished24h = false;      // libera próximo ciclo
+}
+
+  delay(5);
+}
+
+//========= Funções auxiliares existentes/adaptadas ============
+float readLuxSensor(){
+  return lightMeter.readLightLevel();
 }
 
 void readDHT11Sensor(){
@@ -225,21 +555,253 @@ void readDHT11Sensor(){
     Serial.print("Hum: ");
     Serial.println(data.humidity);
   }
+}
 
-  delay(2000);
+void readSoundSensor(){
+  int v = digitalRead(soundPin);
+  Serial.print("SoundPin: "); Serial.println(v);
 }
 
 void activateBuzzer(){
+  if (buzzerMuted) {
+    noTone(buzzerPin);
+    return;
+  }
+
   unsigned long currentMillis = millis();
   unsigned long elapsed = currentMillis - lastMillis;
 
   if (elapsed < buzzDuration) {
-    digitalWrite(buzzerPin, HIGH); // Buzzer ligado
+    tone(buzzerPin, 660, 1000);
   } else {
-    digitalWrite(buzzerPin, LOW);  // Buzzer desligado
+    noTone(buzzerPin);
   }
 
   if (elapsed >= intervalBuzzer) {
-    lastMillis = currentMillis; // Reinicia o contador a cada intervalo
+    lastMillis = currentMillis;
   }
+}
+
+void updateMacroCycle(float luxAvg1m) {
+    // tendência macro baseada em valores de 1 minuto
+    if (luxAvg1m < LUX_LONG_NIGHT) {
+        darkMinutes++;
+        lightMinutes = 0;
+    }
+    else if (luxAvg1m > LUX_LONG_DAY) {
+        lightMinutes++;
+        darkMinutes = 0;
+    }
+    else {
+        // 
+    }
+
+    // ---- Decisão de 6 horas ----
+    if (darkMinutes >= MIN_MINUTES_NIGHT && !macroNight) {
+        macroNight = true;
+        Serial.println(">>> CICLO MACRO: NOITE CONFIRMADA");
+    }
+
+    if (lightMinutes >= MIN_MINUTES_DAY && macroNight) {
+        macroNight = false;
+        Serial.println(">>> CICLO MACRO: DIA CONFIRMADO");
+    }
+}
+
+bool detectNightLight(float luxValue, unsigned long now) {
+    static bool lightDetected = false;
+    static unsigned long startTime = 0;
+
+    // Só analisa se macro indica noite
+    if (!macroNight) {
+        lightDetected = false;
+        return false;
+    }
+
+    // Se a leitura > 20 lux → há luz indevida
+    if (luxValue > 20.0) {
+        if (!lightDetected) {
+            lightDetected = true;
+            startTime = now;
+        }
+        else {
+            // 2 minutos com luz durante período noturno → ALARME
+            if (now - startTime > 120000UL) {
+                return true;
+            }
+        }
+    } else {
+        lightDetected = false;
+    }
+
+    return false;
+}
+
+void resetMetrics() {
+  luxMin = 32555.0; luxMax = 0.0;
+  tempMin = 32555.0; tempMax = 0.0;
+  rhMin = 100.0; rhMax = 0.0;
+  noiseMin24h = 100.0; noiseMax24h = 0.0;
+
+  luxCount = tempCount = humCount = noiseCount = 0;
+
+  outTempCount = inTempCount = 0;
+  outRHCount = inRHCount = 0;
+  outLuxCount = inLuxCount = 0;
+  outNoiseCount = inNoiseCount = 0;
+
+  critTempSec = critRHSec = critLuxSec = critNoiseSec = 0;
+  multiOutSec = 0;
+
+  tempTotalSamples = tempOutSamples = 0;
+  rhTotalSamples = rhOutSamples = 0;
+  luxTotalSamples = luxOutSamples = 0;
+  noiseTotalSamples = noiseOutSamples = 0;
+
+  darkAlarm = false;
+}
+
+void saveDayCounter() {
+  File f = LittleFS.open("/dayCounter.txt", "w");
+  if (!f) {
+    Serial.println("Erro ao salvar dayCounter");
+    return;
+  }
+  f.print(dayCounter);
+  f.close();
+}
+
+void loadDayCounter() {
+  File f = LittleFS.open("/dayCounter.txt", "r");
+  if (!f) {
+    Serial.println("dayCounter nao existe, iniciando em 0");
+    dayCounter = 0;
+    return;
+  }
+  dayCounter = f.parseInt();
+  f.close();
+}
+
+void createFile(const char *filename) {
+  DynamicJsonDocument doc(1024);
+
+  float tempOutPct  = (tempTotalSamples > 0) ? 
+    (100.0 * tempOutSamples / tempTotalSamples) : 0;
+
+  float rhOutPct    = (rhTotalSamples > 0) ? 
+      (100.0 * rhOutSamples / rhTotalSamples) : 0;
+
+  float luxOutPct   = (luxTotalSamples > 0) ? 
+      (100.0 * luxOutSamples / luxTotalSamples) : 0;
+
+  float noiseOutPct = (noiseTotalSamples > 0) ? 
+      (100.0 * noiseOutSamples / noiseTotalSamples) : 0;
+
+  doc["timestamp"] = millis();
+
+  JsonObject gy30 = doc["sensors"].createNestedObject("gy30");
+  gy30["min"] = luxMin;
+  gy30["max"] = luxMax;
+  gy30["avg"] = luxAvg1m;
+  gy30["timeout"] = luxOutPct;
+
+  JsonObject dht = doc["sensors"].createNestedObject("dht11");
+
+  JsonObject temp = dht.createNestedObject("temperature");
+  temp["min"] = tempMin;
+  temp["max"] = tempMax;
+  temp["avg"] = tempAvg1m;
+  temp["timeout"] = tempOutPct;
+
+  JsonObject hum = dht.createNestedObject("humidity");
+  hum["min"] = rhMin;
+  hum["max"] = rhMax;
+  hum["avg"] = rhAvg1m;
+  hum["timeout"] = rhOutPct;
+
+  JsonObject ky037 = doc["sensors"].createNestedObject("ky037");
+  ky037["min"] = noiseMin24h;
+  ky037["max"] = noiseMax24h;
+  ky037["avg"] = noiseAvg1m;
+  ky037["peak"] = noisePeak;
+  ky037["timeout"] = noiseOutPct;
+
+  File file = LittleFS.open(filename, "w");
+  if (!file) {
+    Serial.println("Failed to open file for writing");
+    return;
+  }
+
+  if (serializeJson(doc, file) == 0) {
+    Serial.println("Failed to write JSON to file");
+  } else {
+    Serial.println("JSON file saved successfully");
+  }
+
+  file.close();
+}
+
+void createCSV(const char *filename) {
+
+  float tempOutPct  = (tempTotalSamples > 0) ? 
+    (100.0 * tempOutSamples / tempTotalSamples) : 0;
+
+  float rhOutPct    = (rhTotalSamples > 0) ? 
+      (100.0 * rhOutSamples / rhTotalSamples) : 0;
+
+  float luxOutPct   = (luxTotalSamples > 0) ? 
+      (100.0 * luxOutSamples / luxTotalSamples) : 0;
+
+  float noiseOutPct = (noiseTotalSamples > 0) ? 
+      (100.0 * noiseOutSamples / noiseTotalSamples) : 0;
+
+  File file = LittleFS.open(filename, "w");
+  if (!file) {
+    Serial.println("Failed to open CSV file for writing");
+    return;
+  }
+
+  file.println("Sensor,Min,Max,Avg,PercentOut");
+
+  file.print("Lux,");
+  file.print(luxMin); file.print(",");
+  file.print(luxMax); file.print(",");
+  file.print(luxAvg1m); file.print(",");
+  file.println(luxOutPct);
+
+  file.print("Temp,");
+  file.print(tempMin); file.print(",");
+  file.print(tempMax); file.print(",");
+  file.print(tempAvg1m); file.print(",");
+  file.println(tempOutPct);
+
+  file.print("UR,");
+  file.print(rhMin); file.print(",");
+  file.print(rhMax); file.print(",");
+  file.print(rhAvg1m); file.print(",");
+  file.println(rhOutPct);
+
+  file.print("Noise,");
+  file.print(noiseMin24h); file.print(",");
+  file.print(noiseMax24h); file.print(",");
+  file.print(noiseAvg1m); file.print(",");
+  file.println(noiseOutPct);
+
+  file.close();
+  Serial.println("CSV file saved successfully");
+}
+
+void printFile(const char *filename) {
+  File file = LittleFS.open(filename, "r");
+  if (!file) {
+    Serial.println("Failed to open file");
+    return;
+  }
+
+  Serial.println("----- START FILE -----");
+  while (file.available()) {
+    Serial.write(file.read());
+  }
+  Serial.println("\n----- END FILE -----");
+  file.close();
 }
