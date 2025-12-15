@@ -51,10 +51,10 @@ const int buzzDuration = 300;               // 300 ms
 unsigned long lastMillis = 0;
 
 // ========= Constantes para médias/histerese/limites ==========
-const float TEMP_OK_MIN = 22.0, TEMP_OK_MAX = 33;
+const float TEMP_OK_MIN = 22.0, TEMP_OK_MAX = 26.0;
 const float TEMP_ATT_MIN = 20.0, TEMP_ATT_MAX = 28.0;
 
-const float RH_OK_MIN   = 35.0, RH_OK_MAX   = 66.0;
+const float RH_OK_MIN   = 40.0, RH_OK_MAX   = 60.0;
 const float RH_ATT_MIN  = 35.0, RH_ATT_MAX  = 65.0;
 
 const float LUX_OK_MIN  = 150.0, LUX_OK_MAX = 300.0;
@@ -97,7 +97,7 @@ uint16_t multiOutSec=0;
 bool darkAlarm = false;
 
 const unsigned long RUN_24H = 24UL * 60UL * 60UL * 1000UL; // 24h em ms
-const unsigned long RUN_8MIN = 8UL * 60UL * 1000UL; // 8 MIN em ms
+const unsigned long RUN_1MIN = 1UL * 60UL * 1000UL; // 2 MIN em ms
 unsigned long startMillis = 0;
 bool finished24h = false;
 
@@ -265,47 +265,41 @@ void loop() {
         luxOutSamples++;
     }
 
-    // ATUALIZA AMBAS AS DETECÇÕES DIA/NOITE
+    // Atualiza ambas as detecções dia/noite
     updateDayNight10min(luxAvg1m, currentMillis);
     updateMacroCycle(luxAvg1m, currentMillis);
 
-    // Detecta luz indevida durante a noite
-    bool nightLightAlarm = detectNightLight(luxValue, currentMillis);
-    if (nightLightAlarm) {
-        darkAlarm = true;
-        Serial.println("*** LUZ INDEVIDA DETECTADA DURANTE A NOITE ***");
+  // Detecta luz indevida durante a noite (usando luxAvg1m)
+  bool nightLightAlarm = detectNightLight(luxAvg1m, currentMillis); // Usando luxAvg1m, média de 1 minuto
+
+  if (nightLightAlarm) {
+      darkAlarm = true;
+      critLuxSec = 300; // Alarme se luz indevida for detectada por mais de 2 minutos
+      Serial.println("*** LUZ INDEVIDA DETECTADA DURANTE A NOITE ***");
+  }
+
+  // ---------- Período claro ----------
+  if (!nightNow()) {  // Período claro, dia
+    bool insideOK = (luxAvg1m >= LUX_OK_MIN && luxAvg1m <= LUX_OK_MAX); // Verifica se a luz está dentro da faixa normal
+    bool outside  = !insideOK; // Fora da faixa ideal de luz
+    bool critical = (luxAvg1m < LUX_ATT_MIN || luxAvg1m > LUX_ATT_MAX); // Condição crítica de luminosidade
+
+    if (outside) { 
+      outLuxCount++; 
+      inLuxCount = 0; 
+    } else { 
+      inLuxCount++; 
+      outLuxCount = 0; 
     }
 
-    // ---------- Período claro ----------
-    if (!nightNow()) {
-      bool insideOK = (luxAvg1m >= LUX_OK_MIN && luxAvg1m <= LUX_OK_MAX);
-      bool outside  = !insideOK;
-      bool critical = (luxAvg1m < LUX_ATT_MIN || luxAvg1m > LUX_ATT_MAX);
-
-      if (outside){ outLuxCount++; inLuxCount=0; } else { inLuxCount++; outLuxCount=0; }
-      if (critical) critLuxSec += 2; else critLuxSec = 0;
-
-      darkLightDetected = false;
-      darkStartTime = 0;
+    if (critical) {
+      critLuxSec += 2; // Incrementa 2 segundos no contador de tempo crítico
+    } else {
+      critLuxSec = 0;  // Reseta o contador se a luz estiver dentro do intervalo normal
     }
-    // ---------- Período escuro ----------
-    else {
-      // se detectar qualquer luz (luxValue > 0), inicia contagem
-      if (luxValue > 0) {
-        if (!darkLightDetected) {
-          darkStartTime = currentMillis;
-          darkLightDetected = true;
-        } else {
-          if (currentMillis - darkStartTime >= darkAlertTime) {
-            Serial.println("Luz detectada no período escuro por > 2 min.");
-            darkAlarm = true;
-            critLuxSec = 300;
-          }
-        }
-      } else {
-        darkLightDetected = false;
-        darkStartTime = 0;
-      }
+    
+    darkLightDetected = false; // Reseta flag de luz detectada durante a noite
+    darkStartTime = 0;  // Reseta o tempo de início da luz detectada
     }
   }
 
@@ -361,7 +355,6 @@ void loop() {
       critTempSec = tempCRI ? (critTempSec + 10) : 0;
       critRHSec   = rhCRI   ? (critRHSec   + 10) : 0;
 
-      // Mantive teus prints de contagem de leituras
       if (!tempOK) {
         rangeOutTempTimes++;
         Serial.print("Temperature out of range. Counting times: ");
@@ -460,6 +453,8 @@ void loop() {
   bool noiseOut = (outNoiseCount >= 1);
   uint8_t outs = (tempOut?1:0) + (rhOut?1:0) + (luxOut?1:0) + (noiseOut?1:0);
 
+  //Se 2 ou mais métricas estiverem ruins ao mesmo tempo, acumula 1 segundo
+  //Caso contrário (menos de 2 ruins), zera o contador
   if (outs >= 2) multiOutSec += 1;
   else multiOutSec = 0;
 
@@ -518,7 +513,7 @@ void loop() {
   }
 
   //Após 24h (ou 8min para teste), gera relatório
-  if (!finished24h && millis() - startMillis >= RUN_8MIN) {
+  if (!finished24h && millis() - startMillis >= RUN_24H) {
     finished24h = true;
     Serial.println(">>> FIM DA COLETA");
 
@@ -621,8 +616,6 @@ void updateMacroCycle(float luxAvg1m, unsigned long now) {
       printDayNightStatus();
     }
   }
-  // Zona neutra - não reseta os contadores do macro
-  // Queremos 6h contínuas, então zona neutra apenas pausa a contagem
 }
 
 // Verifica se é noite (usa hierarquia: macro primeiro, depois 10min)
