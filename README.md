@@ -108,3 +108,24 @@ Adotamos que o sistema embarcado não teria acesso ao WiFi, de modo que não ser
 - Detecção rápida (10 minutos)
 - Confirmação macro (6 horas)
 Essas funções avaliam a tendência a partir da luminosidade após um tempo curto e prolongado.
+
+## Geração de Relatórios
+O sistema gera automaticamente relatórios ao final de cada ciclo de monitoramento (24 horas ou 1 minuto no modo de teste).
+Formatos Gerados:
+- CSV – visualização rápida
+- JSON – integração com sistemas
+O formato JSON é mantido visando integração futura com um backend, facilitando o consumo, armazenamento e processamento dos dados por aplicações externas.
+Os valores são salvos consecutivamentes e corresponde ao número do dia, armazenado de forma persistente no arquivo dayCounter.txt.
+Formato do relatório:
+- /relatorio_dia_XXX.csv
+- /relatorio_dia_XXX.json
+
+### Conteúdo dos Relatórios
+Para cada sensor, são registrados:
+- Valor mínimo
+- Valor máximo
+- Valor médio
+- Percentual de tempo fora da faixa ideal
+Os arquivos são armazenados localmente no LittleFS e podem ser lidos via Serial Monitor ou extraídos do sistema de arquivos do ESP32.
+
+
