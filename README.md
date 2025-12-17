@@ -78,10 +78,12 @@ Para cada variável, o sistema monitora:
 - Se está dentro da faixa ideal (OK)
 - Se está fora da faixa ideal por leituras consecutivas
 - Se permanece em condição crítica por tempo prolongado
+
 Além disso, o sistema avalia múltiplas variáveis fora da faixa ao mesmo tempo.
 
 ### Condição de Atenção (ATENCAO)
 O sistema entra em ATENÇÃO quando qualquer sensor apresenta 3 leituras consecutivas fora da faixa ideal, considerando as médias de 1 minuto.
+
 Nesse estado:
 - LED amarelo ligado
 - Buzzer desligado
@@ -91,6 +93,7 @@ O sistema entra em ALARME quando ocorre qualquer uma das situações abaixo:
 - Uma variável permanece em condição crítica por mais de 5 minutos
 - Duas ou mais variáveis ficam fora da faixa ideal simultaneamente por mais de 1 minuto
 - Detecção de luz indevida durante o período noturno por mais de 2 minutos
+
 Nesse estado:
 - LED vermelho ligado
 - Buzzer ativado (com possibilidade de silenciamento temporário)
@@ -100,6 +103,7 @@ O sistema permanece em OK quando:
 - Todas as variáveis estão dentro da faixa ideal
 - Não há condição crítica ativa
 - Não há múltiplas variáveis fora do ideal simultaneamente
+
 Nesse estado:
 - LED verde ligado
 - Buzzer desligado
@@ -108,13 +112,16 @@ Nesse estado:
 Adotamos que o sistema embarcado não teria acesso ao WiFi, de modo que não seria possível obter o tempo real de execução. Deste modo, a aplicação contém:
 - Detecção rápida (10 minutos)
 - Confirmação macro (6 horas)
+
 Essas funções avaliam a tendência a partir da luminosidade após um tempo curto e prolongado.
 
 ## Geração de Relatórios
 O sistema gera automaticamente relatórios ao final de cada ciclo de monitoramento (24 horas ou 1 minuto no modo de teste).
+
 Formatos Gerados:
 - CSV – visualização rápida
 - JSON – integração com sistemas
+
 O formato JSON é mantido visando integração futura com um backend, facilitando o consumo, armazenamento e processamento dos dados por aplicações externas.
 Os valores são salvos consecutivamentes e corresponde ao número do dia, armazenado de forma persistente no arquivo dayCounter.txt.
 
@@ -128,6 +135,7 @@ Para cada sensor, são registrados:
 - Valor máximo
 - Valor médio
 - Percentual de tempo fora da faixa ideal
+
 Os arquivos são armazenados localmente no LittleFS e podem ser lidos via Serial Monitor ou extraídos do sistema de arquivos do ESP32.
 
-
+[Vídeo da aplicação] (https://drive.google.com/file/d/1VnFFJ3nH4gL6ddSOGJdfZgjzzgNC6EAj/view?usp=sharing)
