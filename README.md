@@ -4,6 +4,7 @@ Este projeto implementa um sistema de monitoramento ambiental inteligente usando
 - Umidade relativa do ar
 - Luminosidade
 - Ruído ambiente
+
 O sistema utiliza médias móveis, histerese, detecção de dia/noite, alarmes sonoros e visuais, além de geração automática de relatórios em CSV e JSON armazenados no LittleFS.
 
 ## Principais funcionalidades
@@ -116,6 +117,7 @@ Formatos Gerados:
 - JSON – integração com sistemas
 O formato JSON é mantido visando integração futura com um backend, facilitando o consumo, armazenamento e processamento dos dados por aplicações externas.
 Os valores são salvos consecutivamentes e corresponde ao número do dia, armazenado de forma persistente no arquivo dayCounter.txt.
+
 Formato do relatório:
 - /relatorio_dia_XXX.csv
 - /relatorio_dia_XXX.json
