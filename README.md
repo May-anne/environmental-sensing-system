@@ -1,2 +1,110 @@
 # environmental-sensing-system
-Repositório para projeto da 2º unidade da disciplina de Sistemas Embarcados, dedicado à implementação de um sistema simples e completo de monitoramento ambiental para biotérios. 
+Este projeto implementa um sistema de monitoramento ambiental inteligente usando ESP32, com análise contínua de:
+- Temperatura
+- Umidade relativa do ar
+- Luminosidade
+- Ruído ambiente
+O sistema utiliza médias móveis, histerese, detecção de dia/noite, alarmes sonoros e visuais, além de geração automática de relatórios em CSV e JSON armazenados no LittleFS.
+
+## Principais funcionalidades
+- Monitoramento contínuo (24h ou modo teste)
+- Detecção de condições OK / Atenção / Alarme
+- Detecção de luz indevida durante a noite
+- Detecção de picos prolongados de ruído
+- Botão físico para silenciar alarme por 10 minutos
+- Relatórios automáticos em CSV e JSON
+- Persistência de dados usando LittleFS
+
+## Hardware Utilizado
+- ESP32
+- Sensor de luminosidade GY-30 (BH1750)
+- Sensor de temperatura e umidade DHT11
+- Sensor de ruído KY-037
+- 3 LEDs (Verde, Amarelo, Vermelho)
+- Buzzer
+- Botão de silenciamento
+
+## Medição dos Sensores
+### Temperatura (DHT11)
+- Leitura: sensor digital DHT11
+- Intervalo de leitura: 10 segundos
+- Processamento: média móvel de 1 minuto (6 amostras)
+
+Faixas:
+- OK: 22 a 26 °C
+- Atenção: 20 a 28 °C
+- Crítico: < 20 °C ou > 28 °C
+
+### Umidade Relativa (DHT11)
+- Leitura: sensor digital DHT11
+- Intervalo de leitura: 10 segundos
+- Processamento: média móvel de 1 minuto (6 amostras)
+
+Faixas:
+- OK: 40 a 60 %
+- Atenção: 35 a 65 %
+- Crítico: < 35 % ou > 65 %
+
+### Luminosidade (BH1750 / GY-30)
+- Leitura: sensor I2C BH1750
+- Intervalo de leitura: 2 segundos
+- Processamento: média móvel de 1 minuto (30 amostras)
+
+Faixas (período diurno):
+- OK: 150 a 300 lux
+- Atenção: 100 a 500 lux
+- Crítico: < 100 lux ou > 500 lux
+
+Período noturno:
+- Luz > 20 lux por mais de 2 minutos → Alarme
+
+### Ruído (KY-037)
+- Leitura: saída digital (DO)
+- Intervalo de amostragem: janela de 1 segundo
+- Processamento: cálculo do percentual de tempo em nível HIGH
+- Média: média móvel de 1 minuto (60 janelas)
+
+Faixas (score percentual):
+- OK: ≤ 40 %
+- Atenção: 41 a 60 %
+
+## Decisão Global de Estados
+
+O estado do sistema é definido a partir da análise conjunta de temperatura, umidade, luminosidade e ruído, considerando médias móveis, histerese e tempo acumulado em condição crítica.
+
+### Critérios Avaliados
+Para cada variável, o sistema monitora:
+- Se está dentro da faixa ideal (OK)
+- Se está fora da faixa ideal por leituras consecutivas
+- Se permanece em condição crítica por tempo prolongado
+Além disso, o sistema avalia múltiplas variáveis fora da faixa ao mesmo tempo.
+
+### Condição de Atenção (ATENCAO)
+O sistema entra em ATENÇÃO quando qualquer sensor apresenta 3 leituras consecutivas fora da faixa ideal, considerando as médias de 1 minuto.
+Nesse estado:
+- LED amarelo ligado
+- Buzzer desligado
+
+### Condição de Alarme (ALARME)
+O sistema entra em ALARME quando ocorre qualquer uma das situações abaixo:
+- Uma variável permanece em condição crítica por mais de 5 minutos
+- Duas ou mais variáveis ficam fora da faixa ideal simultaneamente por mais de 1 minuto
+- Detecção de luz indevida durante o período noturno por mais de 2 minutos
+Nesse estado:
+- LED vermelho ligado
+- Buzzer ativado (com possibilidade de silenciamento temporário)
+
+### Condição Normal (OK)
+O sistema permanece em OK quando:
+- Todas as variáveis estão dentro da faixa ideal
+- Não há condição crítica ativa
+- Não há múltiplas variáveis fora do ideal simultaneamente
+Nesse estado:
+- LED verde ligado
+- Buzzer desligado
+
+## Detecção de Dia e Noite
+Adotamos que o sistema embarcado não teria acesso ao WiFi, de modo que não seria possível obter o tempo real de execução. Deste modo, a aplicação contém:
+- Detecção rápida (10 minutos)
+- Confirmação macro (6 horas)
+Essas funções avaliam a tendência a partir da luminosidade após um tempo curto e prolongado.
