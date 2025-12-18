@@ -25,6 +25,39 @@ O sistema utiliza médias móveis, histerese, detecção de dia/noite, alarmes s
 - Buzzer
 - Botão de silenciamento
 
+## Mapeamento de Pinos, Comunicação e Temporização
+O sistema utiliza temporização baseada em millis(), comunicação por barramentos padrão e interrupções para garantir operação não bloqueante.
+
+### Protocolos Utilizados
+
+I2C:
+- Sensor de luminosidade BH1750 (GY-30)
+- Pinos: SDA (GPIO 21) e SCL (GPIO 22)
+
+UART (Serial):
+- Comunicação para debug e acompanhamento do sistema
+- Baud rate: 115200
+
+GPIO Digital / Analógico
+- Leitura de sensores, botão
+- Controle de LEDs e buzzer
+
+### Temporização (Timers)
+
+O sistema não utiliza delay() para controle lógico, de modo que todas as tarefas são controladas por timers baseados em millis().
+
+Cada sensor possui seu próprio intervalo de leitura:
+- Luminosidade: 2 s
+- Temperatura / Umidade: 10 s
+- Ruído: janelas de 1 s
+
+O ciclo de monitoramento (24h ou modo teste) também é controlado por timer
+
+Essa abordagem permite:
+- Execução paralela das tarefas
+- Maior responsividade do sistema
+- Funcionamento contínuo sem bloqueios
+
 ## Medição dos Sensores
 ### Temperatura (DHT11)
 - Leitura: sensor digital DHT11
