@@ -28,6 +28,21 @@ O sistema utiliza médias móveis, histerese, detecção de dia/noite, alarmes s
 ## Mapeamento de Pinos, Comunicação e Temporização
 O sistema utiliza temporização baseada em millis(), comunicação por barramentos padrão e interrupções para garantir operação não bloqueante.
 
+### Pinos
+
+| Componente   | GPIO |
+| ------------ | ---- |
+| BH1750 SDA   | 21   |
+| BH1750 SCL   | 22   |
+| DHT11        | 19   |
+| KY-037 (DO)  | 33   |
+| LED Verde    | 17   |
+| LED Amarelo  | 16   |
+| LED Vermelho | 4    |
+| Buzzer       | 26   |
+| Botão        | 27   |
+
+
 ### Protocolos Utilizados
 
 I2C:
