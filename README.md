@@ -44,14 +44,12 @@ GPIO Digital / Analógico
 
 ### Temporização (Timers)
 
-O sistema não utiliza delay() para controle lógico, de modo que todas as tarefas são controladas por timers baseados em millis().
+O sistema não utiliza delay() para controle lógico, de modo que todas as tarefas são controladas por timers baseados em millis(). O ciclo de monitoramento (24h ou modo teste) também é controlado por timer.
 
 Cada sensor possui seu próprio intervalo de leitura:
 - Luminosidade: 2 s
 - Temperatura / Umidade: 10 s
 - Ruído: janelas de 1 s
-
-O ciclo de monitoramento (24h ou modo teste) também é controlado por timer
 
 Essa abordagem permite:
 - Execução paralela das tarefas
